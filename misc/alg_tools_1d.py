@@ -4,9 +4,6 @@ from scipy import linalg
 import os
 from matplotlib import rcParams
 
-
-
-
 def distance(x1, x2):
     """
     Given two arrays of numbers x1 and x2, pairs the cells that are the

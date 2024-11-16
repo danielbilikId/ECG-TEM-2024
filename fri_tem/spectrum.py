@@ -37,5 +37,5 @@ def sepctrum(signal,K, Kmax,b,d,kappa,T):
     ytnHat = ytnHat.conj().T * N
 
     spectrum = ytnHat[K:].conj()
-    spectrum_denoised = cadzow(spectrum, target_rank=10, iterations=K*2)
+    spectrum_denoised = cadzow(spectrum, target_rank=Kmax, iterations=K*100)
     return tn, spectrum_denoised

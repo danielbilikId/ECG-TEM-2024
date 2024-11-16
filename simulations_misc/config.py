@@ -1,0 +1,1 @@
+ECG_PATH = "C:\\Users\\97253\\OneDrive - Ben Gurion University of the Negev\\Desktop\\IF-TEM\\ecg_Data"
