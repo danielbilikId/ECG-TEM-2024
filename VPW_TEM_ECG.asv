@@ -1,0 +1,142 @@
+% Main Script for VPW-FRI Signal Reconstruction
+rng(10)
+% Step 1: Generate Synthetic ECG Signal
+fs = 2000; % Sampling frequency
+t = 0:1/fs:1; % Time vector
+T_period = 1; % Signal period
+K = 10; % Number of ECG pulses
+x = load('u.mat');
+x = real(x.signal2);
+
+% ECG Signal Model
+x = zeros(size(t));
+for k = 1:K
+    x = x + (c(k) * r(k)) ./ (pi * (r(k)^2 + (t - T_k(k)).^2)) + ...
+        (d(k) * (t - T_k(k))) ./ (pi * (r(k)^2 + (t - T_k(k)).^2));
+end
+
+% Step 2: Filter the Signal
+f_low = 0.5; f_high = 40; % Band-pass filter frequencies
+[b, a] = butter(4, [f_low, f_high] / (fs / 2), 'bandpass');
+x_filtered = filtfilt(b, a, x);
+
+% Step 3: Simulate IF-TEM Sampling
+b = 1.24; % Bias
+delta = 0.05; % Threshold
+kappa = 1; % Scaling factor
+integrator = 0;
+t_n = []; % Time instances of firing
+for i = 2:length(x_filtered)
+    integrator = integrator + kappa * (x_filtered(i) + b) / fs;
+    if integrator >= delta
+        t_n = [t_n, t(i)];
+        integrator = 0; % Reset integrator
+    end
+end
+% Step 4: Define ECG Pulse Model
+ecg_pulse_model = @(t, c, d, r, T) ...
+    (c .* r) ./ (pi * (r.^2 + (t - T).^2)) + ...
+    (d .* (t - T)) ./ (pi * (r.^2 + (t - T).^2));
+
+% Step 5: Define Objective Function for Optimization
+ecg_model = @(params, t) ...
+    sum(cell2mat(arrayfun(@(k) ecg_pulse_model(t, ...
+    params(k), params(K+k), params(2*K+k), params(3*K+k)), ...
+    1:K, 'UniformOutput', false)), 2);
+
+% Flatten initial guesses for optimization
+params0 = [c, d, r, T_k]; % Initial guesses: [c_k, d_k, r_k, T_k]
+objective_function = @(params) norm(x_filtered - ecg_model(params, t));
+
+% Optimize Parameters
+optimized_params = fminsearch(objective_function, params0);
+
+% Step 6: Extract Optimized Parameters
+c_optimized = optimized_params(1:K);
+d_optimized = optimized_params(K+1:2*K);
+r_optimized = optimized_params(2*K+1:3*K);
+T_k_optimized = optimized_params(3*K+1:end);
+
+% Step 7: Reconstruct Signal Using Optimized Parameters
+x_reconstructed = zeros(size(t));
+for k = 1:K
+    x_reconstructed = x_reconstructed + ...
+        (c_optimized(k) * r_optimized(k)) ./ (pi * (r_optimized(k)^2 + (t - T_k_optimized(k)).^2)) + ...
+        (d_optimized(k) * (t - T_k_optimized(k))) ./ (pi * (r_optimized(k)^2 + (t - T_k_optimized(k)).^2));
+end
+
+% Step 8: Normalize Reconstructed Signal
+scaling_factor = max(abs(x)) / max(abs(x_reconstructed));
+x_reconstructed = x_reconstructed * scaling_factor;
+
+% Plot Results
+figure;
+subplot(3, 1, 1); plot(t, x, 'LineWidth', 1.5); title('Original ECG Signal');
+subplot(3, 1, 2); plot(t, x_filtered, 'LineWidth', 1.5); title('Filtered ECG Signal');
+subplot(3, 1, 3); plot(t, x_reconstructed, 'LineWidth', 1.5); title('Reconstructed ECG Signal');
+
+
+% VPW-FRI Reconstruction Function
+function recovered_params = vpw_fri_reconstruction(X, M, T_period, K, omega_0)
+    % Step 1: Construct Toeplitz Matrix for Annihilating Filter
+    X_toeplitz = hankel(X(1:K), X(K:M)); % Hankel matrix for robustness
+    [~, ~, V] = svd(X_toeplitz); % Singular value decomposition
+    annihilating_filter = V(:, end); % Last column is null space
+
+    % Step 2: Find Roots of Annihilating Filter
+    roots_filter = roots(annihilating_filter);
+
+    % Filter Spurious Roots
+    valid_roots = roots_filter(abs(imag(roots_filter)) > 1e-3); % Avoid real roots
+    [~, idx] = sort(abs(valid_roots), 'descend');
+    roots_filter = valid_roots(idx(1:K));
+
+    % Compute Delays and Widths
+    T_k = mod(-angle(roots_filter) * T_period / (2 * pi), T_period); % Delays within [0, T_period]
+    r_k = -log(abs(roots_filter)) * T_period / (2 * pi); % Pulse widths
+
+    % Step 3: Recover Amplitudes (c_k and d_k)
+    A_matrix = zeros(M, K);
+    for m = 1:M
+        for k = 1:K
+            A_matrix(m, k) = exp(-2 * pi * (r_k(k) * abs(m - 1) + 1j * T_k(k) * (m - 1)) / T_period);
+        end
+    end
+    c_d = pinv(A_matrix) * X(1:M).'; % Solve linear system
+    c_k = real(c_d); % Symmetric amplitudes
+    d_k = imag(c_d); % Asymmetric amplitudes
+
+    % Output recovered parameters
+    recovered_params = struct('T', T_k, 'r', r_k, 'c', c_k, 'd', d_k);
+end
+function X_denoised = iqml_denoising(X, K)
+    % IQML denoising based on iterative quadratic maximum likelihood
+    max_iters = 100; % Maximum number of iterations
+    tol = 1e-6; % Convergence tolerance
+    M = length(X); % Length of Fourier coefficients
+
+    % Step 1: Construct initial Hankel matrix
+    S = hankel(X(1:K), X(K:M));
+
+    % Step 2: Iterative process
+    for iter = 1:max_iters
+        % Enforce rank-K constraint using SVD
+        [U, S_mat, V] = svd(S, 'econ');
+        S_denoised = U(:, 1:K) * S_mat(1:K, 1:K) * V(:, 1:K)';
+
+        % Enforce Hankel structure by averaging along anti-diagonals
+        X_denoised = zeros(1, M);
+        for diag_idx = 1:(size(S_denoised, 1) + size(S_denoised, 2) - 1)
+            [rows, cols] = find(bsxfun(@eq, (1:size(S_denoised, 1))' + (1:size(S_denoised, 2)) - 1, diag_idx));
+            X_denoised(diag_idx) = mean(S_denoised(sub2ind(size(S_denoised), rows, cols)));
+        end
+
+        % Update the Hankel matrix with the new denoised coefficients
+        S = hankel(X_denoised(1:K), X_denoised(K:M));
+
+        % Check for convergence
+        if norm(S - S_denoised, 'fro') / norm(S, 'fro') < tol
+            break;
+        end
+    end
+end
