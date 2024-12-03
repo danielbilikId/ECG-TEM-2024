@@ -3,7 +3,7 @@ clc; clear all; close all;
 % ================================ Section 1: Signal Preprocessing ================================
 % Load ECG signal
 signal = load("C:\Users\danie\workspace\ecg\GDN0001\GDN0001_2_Valsalva.mat"); 
-x = signal.tfm_ecg2(1:1600); % Extract signal as column vector
+x = signal.tfm_ecg2(2001:4000); % Extract signal as column vector
 x = x / max(x); % Normalize the signal to [0, 1]
 
 % Generate time vector
@@ -14,7 +14,7 @@ t = linspace(0, T, N); % Time vector (from 0 to T)
 
 % ============================ Section 2: Fourier Coefficient Calculation =========================
 % Define parameters for Fourier analysis
-K = 5; % Number of harmonics to consider
+K = 11; % Number of harmonics to consider
 Kmax = 4 * K + 2; % Maximum number of Fourier components
 m = -Kmax:Kmax; % Frequency indices for Fourier series
 
@@ -33,7 +33,7 @@ y = real(y) / N; % Take real part and normalize
 
 % =============================== Section 3: TEM Sampling and Estimation ==========================
 % Define TEM parameters
-b = 2.9; % TEM bias
+b = .9; % TEM bias
 d = 0.08; % TEM threshold
 kappa = 0.5; % TEM scaling factor
 
@@ -106,44 +106,72 @@ ck = 1 / T * pinv(vander2(uk, length(spectrum)))' * spectrum';
 tk = mod(tk, T); % Wrap delays to [0, T]
 rk = sort(rk, 'descend'); % Sort pulse widths
 ck = ck / N; % Normalize amplitudes
-
+ck = abs(ck);
 % =============================== Section 5: Signal Reconstruction ===============================
-% Optimize parameters via permutations
-numPermutations = 10; % Number of random permutations
-errorMin = inf; % Initialize minimum error
-bestSignal = []; % Initialize best reconstructed signal
-bestParams = []; % Initialize best parameters
+t_eval = linspace(0, T, N); % Evaluation time vector
 
-% Perform optimization loop
-for permIdx = 1:numPermutations
-    % Perturb parameters for optimization
-    tk_perm = tk + 0.01 * (rand(1, K) - 0.5);
-    rk_perm = rk + 0.01 * (rand(1, K) - 0.5);
-    ck_perm = ck + 0.01 * (rand(1, K) - 0.5);
-    
-    % Reconstruct signal with perturbed parameters
-    t_eval = linspace(0, T, N); % Evaluation time vector
-    signal2 = zeros(size(t_eval)); % Initialize reconstructed signal
-    for k = 1:K
-        signal2 = signal2 + time_eval(ck_perm, rk_perm, tk_perm, t_eval, k); % VPW evaluation
-    end
+% Optimization options
+options = optimoptions('fminunc', 'Algorithm', 'quasi-newton', ...
+    'Display', 'iter', 'MaxIterations', 1000, 'OptimalityTolerance', 1e-6);
 
-    % Compute reconstruction error
-    error = norm(x - signal2); % L2 norm of error
-    if error < errorMin
-        errorMin = error; % Update minimum error
-        bestSignal = signal2; % Update best signal
-        bestParams = [tk_perm; rk_perm; ck_perm]; % Update best parameters
-    end
+% Combine ck, tk, rk into a single vector for optimization
+params_init = [ck, tk, rk];
+
+% Define the objective function using pointwise error minimization
+objective = @(params) pointwise_error(params, t_eval, x, K);
+
+% Optimize parameters
+best_params = fminunc(objective, params_init, options);
+
+% Extract optimized ck, tk, rk
+ck_best = best_params(1:K);
+tk_best = best_params(K+1:2*K);
+rk_best = best_params(2*K+1:end);
+
+% Reconstruct the signal with optimized parameters
+signal2 = zeros(size(t_eval));
+for k = 1:K
+    signal2 = signal2 + time_eval(ck_best, rk_best, tk_best, t_eval, k);
 end
+signal2 = signal2/max(signal2); % Normalize reconstructed signal
 
 % ================================ Section 6: Visualization =======================================
 % Plot original and reconstructed signals
 figure;
 plot(t, x, 'k', 'LineWidth', 1.5); hold on;
-plot(t, bestSignal/max(bestSignal), '--r', 'LineWidth', 1.5);
+plot(t, signal2, '--r', 'LineWidth', 1.5);
 legend('Original Signal', 'Reconstructed Signal');
 xlabel('Time (s)');
 ylabel('Amplitude');
 title('Original vs. Reconstructed ECG Signal');
 grid on;
+
+% ============================
+
+function error = pointwise_error(params, t_eval, x, K)
+    % Objective function to minimize the pointwise error
+    % Inputs:
+    % params - Combined vector of ck, tk, rk
+    % t_eval - Time vector for reconstruction
+    % x      - Original signal
+    % K      - Number of pulses
+    % Output:
+    % error - Sum of absolute differences between signals
+    
+    % Extract ck, tk, rk from params
+    ck = params(1:K);
+    tk = params(K+1:2*K);
+    rk = params(2*K+1:end);
+    
+    % Reconstruct the signal
+    signal2 = zeros(size(t_eval));
+    for k = 1:K
+        signal2 = signal2 + time_eval(ck, rk, tk, t_eval, k);
+    end
+    
+    % Normalize reconstructed signal
+    signal2 = signal2 / max(signal2);
+    
+    % Compute pointwise error as sum of absolute differences
+    error = sum(abs(x' - signal2));
+end
