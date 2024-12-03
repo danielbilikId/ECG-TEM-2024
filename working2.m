@@ -3,7 +3,7 @@ clc; clear all; close all;
 % ================================ Section 1: Signal Preprocessing ================================
 % Load ECG signal
 signal = load("C:\Users\danie\workspace\ecg\GDN0001\GDN0001_2_Valsalva.mat"); 
-x = signal.tfm_ecg2(2001:4000); % Extract signal as column vector
+x = signal.tfm_ecg2(1:1600); % Extract signal as column vector
 x = x / max(x); % Normalize the signal to [0, 1]
 
 % Generate time vector
@@ -14,7 +14,7 @@ t = linspace(0, T, N); % Time vector (from 0 to T)
 
 % ============================ Section 2: Fourier Coefficient Calculation =========================
 % Define parameters for Fourier analysis
-K = 11; % Number of harmonics to consider
+K = 5; % Number of harmonics to consider
 Kmax = 4 * K + 2; % Maximum number of Fourier components
 m = -Kmax:Kmax; % Frequency indices for Fourier series
 
@@ -33,7 +33,7 @@ y = real(y) / N; % Take real part and normalize
 
 % =============================== Section 3: TEM Sampling and Estimation ==========================
 % Define TEM parameters
-b = .9; % TEM bias
+b = 2.9; % TEM bias
 d = 0.08; % TEM threshold
 kappa = 0.5; % TEM scaling factor
 
